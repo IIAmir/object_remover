@@ -8,6 +8,7 @@ public class ObjectRemoverPlugin: NSObject, FlutterPlugin {
     var inputImage: UIImage?
     let ciContext = CIContext()
     
+    // Lazy initialization of LaMa model
     lazy var model: LaMa? = {
         do {
             let config = MLModelConfiguration()
@@ -18,13 +19,15 @@ public class ObjectRemoverPlugin: NSObject, FlutterPlugin {
             return nil
         }
     }()
-    
+
+    // Registering the plugin with Flutter
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "methodChannel.objectRemover", binaryMessenger: registrar.messenger())
         let instance = ObjectRemoverPlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
     }
-    
+
+    // Handling method calls from Flutter
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "removeObject":
@@ -34,15 +37,15 @@ public class ObjectRemoverPlugin: NSObject, FlutterPlugin {
                 result(["status": 0, "message": "Invalid arguments!"])
                 return
             }
-            
+
             guard let defaultImage = UIImage(data: defaultImageUint8List.data),
                   let maskedImage = UIImage(data: maskedImageUint8List.data) else {
                 result(["status": 0, "message": "Unable to process image"])
                 return
             }
-            
+
             self.inputImage = defaultImage
-            
+
             processImages(defaultImage: defaultImage, maskImage: maskedImage) { processedImage in
                 if let processedImageData = processedImage?.pngData() {
                     result(["status": 1, "message": "Success", "imageBytes": processedImageData])
@@ -50,53 +53,55 @@ public class ObjectRemoverPlugin: NSObject, FlutterPlugin {
                     result(["status": 0, "message": "Unable to object removing"])
                 }
             }
-            
+
         default:
             result(FlutterMethodNotImplemented)
         }
     }
-    
+
+    // Processing images for object removal
     private func processImages(defaultImage: UIImage, maskImage mask: UIImage, completion: @escaping (UIImage?) -> Void) {
         let normalizedDrawingRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-        
+
         guard let model = model else {
             completion(nil)
             return
         }
-        
+
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 var input: LaMaInput?
                 let originalSize = self.inputImage!.size
                 let drawingRect = CGRect(x: normalizedDrawingRect.minX * originalSize.width, y: normalizedDrawingRect.minY * originalSize.height, width: normalizedDrawingRect.width * originalSize.width, height: normalizedDrawingRect.height * originalSize.height)
-                
+
                 input = try LaMaInput(imageWith: (self.inputImage?.cgImage!)!, maskWith: mask.cgImage!)
-                
+
                 let start = Date()
                 let out = try model.prediction(input: input!)
                 let pixelBuffer = out.output
                 let resultCIImage = CIImage(cvPixelBuffer: pixelBuffer)
-                
+
                 guard let resultCGImage = self.ciContext.createCGImage(resultCIImage, from: resultCIImage.extent) else {
                     completion(nil)
                     return
                 }
-                
+
                 let resultImage = UIImage(cgImage: resultCGImage).resize(size: originalSize)
                 guard let croppedResultImage = self.cropImage(image: resultImage!, rect: drawingRect) else {
                     completion(nil)
                     return
                 }
-                
+
                 let image = self.mergeImageWithRect(image1: self.inputImage!, image2: croppedResultImage, mergeRect: drawingRect)
-                
+
                 completion(image)
             } catch {
                 completion(nil)
             }
         }
     }
-    
+
+    // Crop image based on a given rectangle
     func cropImage(image: UIImage, rect: CGRect) -> UIImage? {
         if let cgImage = image.cgImage {
             let toCGImageScale = CGFloat(cgImage.width) / image.size.width
@@ -106,21 +111,23 @@ public class ObjectRemoverPlugin: NSObject, FlutterPlugin {
         }
         return nil
     }
-    
+
+    // Merge two images based on a given rectangle
     func mergeImageWithRect(image1: UIImage, image2: UIImage, mergeRect: CGRect) -> UIImage? {
         UIGraphicsBeginImageContextWithOptions(image1.size, false, image1.scale)
-        
+
         image1.draw(in: CGRect(x: 0, y: 0, width: image1.size.width, height: image1.size.height))
-        
+
         image2.draw(in: mergeRect)
-        
+
         let mergedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
-        
+
         return mergedImage
     }
 }
 
+// UIImage extension for resizing images
 extension UIImage {
     func resize(size _size: CGSize) -> UIImage? {
         let aspectWidth = _size.width / size.width
